@@ -1101,7 +1101,7 @@ function special(){
     explode(ship.position,1.5);flash('#ff3f9a',.35);
     for(const t of targets){
       if(!t.alive)continue;const d=t.center.distanceTo(ship.position);
-      if(d<(t.tank?170:130))setTimeout(()=>{if(t.alive&&S.state==='play')destroyTarget(t)},40+d*6);
+      if(d<(t.tank?170:130))setTimeout(()=>{if(t.alive&&S.state==='play')damageTarget(t,3,t.center)},40+d*6);
     }
     toast('Nova','Shockwave',1000);
   }else if(R.special==='warp'){
@@ -1124,7 +1124,7 @@ function updateClones(dt){
     c.p.addScaledVector(c.d,72*dt);c.m.position.copy(c.p);c.m.quaternion.setFromUnitVectors(ZN,c.d);
     if(Q()>0)fire.emit(c.p,-c.d.x*6,-c.d.y*6,-c.d.z*6,{life:.3,s0:1,s1:.2,c0:0xbfffd8,c1:0x2fd08a,a:.9,drag:2});
     let dead=false;
-    for(const t of targets){if(t.alive&&hitTarget(t,c.p,2.4)){destroyTarget(t);dead=true;break}}
+    for(const t of targets){if(t.alive&&hitTarget(t,c.p,2.4)){damageTarget(t,2,c.p);dead=true;break}}
     if(!dead)for(let k=0;k<obst.length;k++){const b=obst[k];if(c.p.x>b.x0-1&&c.p.x<b.x1+1&&c.p.y>b.y0-1&&c.p.y<b.y1+1&&c.p.z>b.z0-1&&c.p.z<b.z1+1){dead=true;break}}
     if(!dead&&(c.p.y<1||c.life<=0))dead=true;
     if(dead){explode(c.p,1.1);scene.remove(c.m);clones.splice(i,1)}
@@ -1257,9 +1257,35 @@ function collideWorld(R){
     hitObstacle(nx,ny,nz);return;
   }
 }
+/* Damage system: houses/towers take several hits and visibly break down (roof blown off, shrinking, tilting, smoking) before collapsing. */
+const HP={house:3,tower:4,tank:1};
+function damageTarget(t,amt,pos){
+  if(!t.alive)return;
+  if(t.hp===undefined){t.maxHp=t.hp=t.tank?HP.tank:t.house?HP.house:HP.tower}
+  t.hp-=amt;
+  if(t.hp<=0){destroyTarget(t);return}
+  if(!t.b0){t.b0={x0:t.b.x0,x1:t.b.x1,y0:t.b.y0,y1:t.b.y1,z0:t.b.z0,z1:t.b.z1};t.cy0=t.center.y}
+  const frac=t.hp/t.maxHp,hf=.35+.65*frac;
+  t.hf=hf;t.tiltNow=(1-frac)*.22;t.smolder=1-frac;
+  t.g.scale.y=hf*WK;t.g.rotation.z=t.tilt*t.tiltNow;
+  t.b.y1=t.b0.y1*hf;t.center.y=t.cy0*hf;
+  if(t.house&&t.g.children[1])t.g.children[1].visible=false;
+  const at=(pos||t.center).clone();
+  explode(at,.9);spawnDebris(at,7,24);
+  if(S.mode!=='free')toast(t.house?'House damaged':'Tower damaged',t.hp+(t.hp>1?' hits':' hit')+' left',750);
+}
 function collideTargets(R){
   const p=ship.position;
-  for(const t of targets)if(t.alive&&hitTarget(t,p,R+.45))destroyTarget(t);
+  for(const t of targets){
+    if(!t.alive||!hitTarget(t,p,R+.45))continue;
+    if(t.tank||S.mode==='free'){destroyTarget(t);continue}
+    if(t.hitCd>0)continue;
+    let nx=p.x-t.center.x,ny=(p.y-t.center.y)*.5,nz=p.z-t.center.z;
+    const nl=Math.hypot(nx,ny,nz)||1;nx/=nl;ny/=nl;nz/=nl;
+    t.hitCd=.55;
+    damageTarget(t,S.boostOn?2:1,p);
+    if(t.alive){knock.set(nx,ny,nz).multiplyScalar(26);S.speed*=.5;vel.multiplyScalar(.55);sparkBurst(p,nx,ny,nz,14)}
+  }
 }
 
 /* ---------- update ---------- */
@@ -1358,6 +1384,7 @@ function modeTick(dt){
 }
 function updateTargets(dt){
   for(const t of targets){
+    if(t.hitCd>0)t.hitCd-=dt;
     if(t.tank){
       if(!t.alive)continue;
       t.u+=t.dir*t.sp*dt;
@@ -1369,11 +1396,15 @@ function updateTargets(dt){
     }
     if(t.alive){
       if(!t.g.visible)continue;
+      if(t.smolder>0&&Q()>0){t.sm=(t.sm||0)-dt;if(t.sm<=0){t.sm=.1/Q();
+        tmp.set(t.center.x+(Math.random()-.5)*t.w,t.b.y1,t.center.z+(Math.random()-.5)*t.d);
+        smoke.emit(tmp,(Math.random()-.5)*2,3+Math.random()*3,(Math.random()-.5)*2,{life:1.6,s0:2.5,s1:9,c0:0x4a4440,c1:0x161412,a:.5,drag:1});
+        if(t.smolder>.45&&Math.random()<.5)fire.emit(tmp,0,6,0,{life:.5,s0:1.4,s1:.3,c0:0xffd070,c1:0xff3a08,a:1,g:-4,drag:1})}}
       if(t.ring){t.ring.rotation.z+=dt*.9;const pl=1+.05*Math.sin(S.t*4+t.h);t.ring.scale.set(pl,pl,1)}
       if(t.beacon)t.beacon.material.opacity=.3+.1*Math.sin(S.t*3+t.w);
     }else if(t.cT>=0&&t.cT<1){
       t.cT=Math.min(1,t.cT+dt/1.5);const e=t.cT*t.cT;
-      t.g.scale.y=Math.max(.02,1-e)*WK;t.g.rotation.z=t.tilt*e*.1;
+      t.g.scale.y=(t.hf||1)*Math.max(.02,1-e)*WK;t.g.rotation.z=t.tilt*Math.max(e*.1,t.tiltNow||0);
       t.dust-=dt;
       if(t.dust<=0&&Q()>0){t.dust=.05/Q();tmp.set(t.center.x+(Math.random()-.5)*t.w,1+Math.random()*3,t.center.z+(Math.random()-.5)*t.d);
         smoke.emit(tmp,(Math.random()-.5)*8,3+Math.random()*4,(Math.random()-.5)*8,{life:1.8,s0:5,s1:15,c0:0x7a6f63,c1:0x2a2623,a:.5,drag:1})}
